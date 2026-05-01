@@ -172,95 +172,81 @@ src/main/java/com/smartcampus/filter
 src/main/webapp/WEB-INF
 ```
 
-## Coursework Report Answers
+Coursework Report Answers
+Part 1: Service Architecture & Setup
+1. Project and Application Configuration
 
-### Part 1: Service Architecture & Setup
+In JAX-RS, resource classes typically follow a request-scoped lifecycle. This means a fresh instance of the resource is created for each incoming HTTP request unless it is explicitly defined as a singleton. Such an approach minimizes the risk of unintended shared mutable state, making resource classes more reliable and easier to maintain.
 
-#### 1. Project and Application Configuration
+Since these resource objects are short-lived, storing persistent data within them is not practical. Any data stored there would be lost after each request completes. To handle this, I used a separate singleton-like component called CampusStore to manage application state. Given that multiple requests can occur simultaneously, thread safety is ensured by synchronizing write operations and using thread-safe structures like ConcurrentHashMap. This helps avoid inconsistencies when multiple related updates occur together, such as adding a sensor and linking it to a room.
 
-The default lifecycle for a JAX-RS resource class is request-scoped. In other words, the runtime typically creates a new resource instance for each incoming HTTP request unless the class is explicitly managed as a singleton. This design reduces accidental shared mutable state inside resource classes, which makes the resources themselves safer and easier to reason about.
+2. Discovery Endpoint
 
-Because resource instances are normally short-lived, my in-memory data structures cannot live inside the resource objects themselves. If they did, data would be lost between requests. For that reason, I placed the state in a separate singleton-style `CampusStore` component. Since multiple requests may arrive concurrently, write operations in that store are synchronized and the underlying collections use `ConcurrentHashMap` where appropriate. This prevents race conditions during operations that must update several linked structures together, such as creating a sensor and also attaching its ID to a room.
+Hypermedia plays an important role in RESTful APIs by allowing responses to guide clients on possible next actions. Instead of relying solely on predefined URLs or external documentation, clients can dynamically navigate the API using links provided in responses.
 
-#### 2. Discovery Endpoint
+This approach reduces dependency between the client and the server’s URI structure. Even if endpoints change, clients can continue functioning by following provided links. While documentation remains useful, hypermedia enhances the API’s self-descriptiveness and usability.
 
-Hypermedia is considered a hallmark of advanced RESTful design because it allows responses to describe what the client can do next, instead of forcing the client to rely entirely on hardcoded URL knowledge or external documentation. In practical terms, this means a client can discover collections, related resources, and transitions dynamically from server responses.
+Part 2: Room Management
+1. Room Resource Implementation
 
-This benefits client developers because it reduces coupling between client code and URI structure. If the API evolves, clients can follow the links returned by the server rather than break when a route changes. Static documentation is still useful, but hypermedia makes the API more self-descriptive and easier to navigate programmatically.
+Providing only room IDs in responses helps reduce payload size and saves bandwidth, especially when dealing with large datasets or when clients only need identifiers. However, this approach requires additional requests if clients need detailed information like room names or capacities.
 
-### Part 2: Room Management
+On the other hand, returning complete room objects simplifies client-side operations by minimizing the number of requests needed. The downside is increased response size and possibly unnecessary data transfer. For this project, full room details are returned because the dataset is small and it improves usability during development and testing.
 
-#### 1. Room Resource Implementation
+2. Room Deletion and Safety Logic
 
-Returning only room IDs reduces payload size and conserves bandwidth, which can matter when the collection is large or when clients only need identifiers for follow-up requests. However, it also forces clients to make more requests if they need room names, capacities, or sensor membership details.
+The DELETE operation is designed to be idempotent. When a room without sensors is deleted, it is removed from the system. If the same request is repeated, the room will no longer exist, resulting in a 404 Not Found response. Despite the change in status code, the system state remains unchanged after repeated requests, which satisfies the definition of idempotency.
 
-Returning full room objects is more convenient for clients because it reduces round trips and offloads less assembly work onto the consumer. The trade-off is a larger response body and potentially more data transfer than necessary. For this coursework I return full room objects because the resource is small and it provides a better developer experience during testing and demonstration.
+Part 3: Sensor Operations & Linking
+1. Sensor Resource and Integrity
 
-#### 2. Room Deletion and Safety Logic
+The @Consumes(MediaType.APPLICATION_JSON) annotation specifies that the endpoint accepts JSON input. If a client sends data in a different format, such as XML or plain text, the framework will not process it and will usually return a 415 Unsupported Media Type response.
 
-The `DELETE` operation remains idempotent in this implementation. If a room has no sensors, the first successful `DELETE` removes it from the server state. If the same exact `DELETE` request is sent again, the room is already absent, so the second response becomes `404 Not Found`. Even though the status code is different, the server state after the first request and after any repeated identical request is the same: the room does not exist. That is why the operation is still considered idempotent.
+This ensures that the API only processes data in expected formats, preventing errors and providing clear feedback to clients when incorrect formats are used.
 
-### Part 3: Sensor Operations & Linking
+2. Filtered Retrieval and Search
 
-#### 1. Sensor Resource and Integrity
+Using @QueryParam for filtering is more appropriate because it maintains the concept of accessing the same resource with additional constraints. For example, /sensors and /sensors?type=CO2 both refer to the sensors collection, with the latter applying a filter.
 
-The `@Consumes(MediaType.APPLICATION_JSON)` annotation tells JAX-RS that the method accepts JSON request bodies. If a client sends the payload using a different media type such as `text/plain` or `application/xml`, Jersey will not find a suitable method-body reader for that combination and the request is typically rejected with `415 Unsupported Media Type`.
+In contrast, using path-based filtering like /sensors/type/CO2 suggests a different hierarchical resource. Query parameters are also more flexible and can easily support multiple conditions, such as ?type=CO2&status=ACTIVE, making them more scalable for future enhancements.
 
-This is useful because it protects the endpoint from silently accepting data in a format it was never written to parse. It also gives clients a clear protocol-level signal that the body format is wrong.
+Part 4: Deep Nesting with Sub-Resources
+1. The Sub-Resource Locator Pattern
 
-#### 2. Filtered Retrieval and Search
+The Sub-Resource Locator pattern improves code structure by delegating specific responsibilities to smaller, focused classes. In this implementation, SensorResource handles sensor-related operations, while SensorReadingResource manages readings associated with a particular sensor. This separation prevents resource classes from becoming overly complex.
 
-Using `@QueryParam` for filtering is generally superior because the client is still requesting the same collection resource, just with additional criteria applied. `/sensors` and `/sensors?type=CO2` both represent the sensors collection; the second request simply narrows the result set. This matches the semantics of filtering and searching.
+As the system grows, this pattern supports better organization by allowing each sub-resource to handle its own logic, validation, and responses. This leads to improved maintainability and easier testing.
 
-By contrast, encoding the filter in the path, such as `/sensors/type/CO2`, makes the URL look like a different hierarchical resource rather than a modified view of the same collection. Query parameters are also easier to combine, for example `?type=CO2&status=ACTIVE`, which scales much better for future API evolution.
+2. Historical Data Management
 
-### Part 4: Deep Nesting with Sub-Resources
+When a new sensor reading is added, it is stored in the sensor’s history, and the sensor’s currentValue is updated immediately. This ensures consistency between the latest sensor value and its recorded history. Clients can either access the current value directly or retrieve historical data for more detailed analysis.
 
-#### 1. The Sub-Resource Locator Pattern
+Part 5: Advanced Error Handling, Exception Mapping and Logging
+1. Resource Conflict (409)
 
-The Sub-Resource Locator pattern improves architecture by delegating nested concerns to smaller classes that focus on a specific context. In this project, `SensorResource` is responsible for sensors, while `SensorReadingResource` handles the reading history beneath a specific sensor. That separation keeps responsibilities clear and avoids an oversized resource class full of unrelated path methods.
+A custom RoomNotEmptyException is thrown when attempting to delete a room that still contains sensors. This is mapped to a 409 Conflict response with a structured JSON message. The request itself is valid, but it conflicts with the current state of the system.
 
-This pattern becomes more valuable as the API grows. Instead of putting every nested endpoint into one large controller, each sub-resource can own its validation, business rules, and response handling. That improves maintainability, readability, and testability.
+2. Dependency Validation (422)
 
-#### 2. Historical Data Management
+The 422 Unprocessable Entity status code is more appropriate than 404 Not Found in this context because the endpoint exists and the request is properly structured. The issue lies within the request data, where it references a non-existent resource. This code clearly indicates that the server understands the request but cannot process it due to invalid input.
 
-When a new reading is posted successfully, the reading is appended to the sensor's history and the parent sensor's `currentValue` is updated immediately. This keeps the collection of historical readings consistent with the top-level sensor representation. A client can therefore inspect the sensor directly for the latest value or fetch the reading history for deeper detail.
+3. State Constraint (403)
 
-### Part 5: Advanced Error Handling, Exception Mapping and Logging
+If a sensor is under maintenance, the API prevents new readings from being added by returning a 403 Forbidden response via the SensorUnavailableException. This reflects a business rule where the request is valid, but the operation is not allowed due to the current state of the resource.
 
-#### 1. Resource Conflict (409)
+4. Global Safety Net (500)
 
-The API throws a custom `RoomNotEmptyException` when a client tries to delete a room that still has sensors assigned to it. The exception mapper converts that condition into `409 Conflict` with a structured JSON body. This is appropriate because the request is syntactically valid, but it conflicts with the current state of the resource graph.
+Exposing internal error details such as stack traces can create security risks by revealing sensitive implementation information. Attackers could use this information to identify vulnerabilities or weaknesses in the system.
 
-#### 2. Dependency Validation (422)
+To prevent this, a global ExceptionMapper<Throwable> is used to handle unexpected errors and return a generic 500 Internal Server Error response, keeping internal details hidden.
 
-HTTP `422 Unprocessable Entity` is often more semantically accurate than `404 Not Found` in this case because the target endpoint itself exists and the overall request syntax is valid. The problem is inside the submitted representation: the payload references another resource that is missing. The server understood the body, but it cannot process it successfully because the room dependency is invalid.
+5. API Request and Response Logging Filters
 
-Using `404` would usually imply that the requested endpoint URL itself does not exist. Here, the client reached the correct endpoint but provided an invalid linked identifier inside the JSON body, so `422` communicates the problem more precisely.
+Logging is handled more effectively using JAX-RS filters, as they allow cross-cutting concerns to be managed in a centralized manner. Embedding logging code within each resource method would lead to duplication and increased maintenance effort.
 
-#### 3. State Constraint (403)
+By implementing ContainerRequestFilter and ContainerResponseFilter, the system logs request methods, URIs, and response statuses consistently across all endpoints, improving monitoring without cluttering business logic.
 
-If a sensor is in `MAINTENANCE`, the API rejects posted readings with `403 Forbidden` through the `SensorUnavailableException` mapper. This models a business rule in which the client is recognized, the endpoint exists, and the payload is valid, but the current state of the sensor does not permit the action.
-
-#### 4. Global Safety Net (500)
-
-Exposing Java stack traces to external users is dangerous because they can reveal implementation details that should remain private. An attacker could learn package names, class names, library versions, internal file paths, server structure, framework choices, and the exact area of the code that failed. That information can be used to plan more targeted attacks, fingerprint vulnerable dependencies, or discover weak points in the application.
-
-For that reason, the application uses a catch-all `ExceptionMapper<Throwable>` to replace unexpected failures with a generic `500 Internal Server Error` JSON message.
-
-#### 5. API Request and Response Logging Filters
-
-JAX-RS filters are a better place for cross-cutting concerns like logging because they centralize behavior that applies to every endpoint. If logging code were manually inserted into each resource method, it would create repetition, increase maintenance effort, and make it easy to forget logging in new endpoints.
-
-By using `ContainerRequestFilter` and `ContainerResponseFilter`, the project logs method, URI, and final status consistently for every request in one place. This improves observability without cluttering the business logic of the resource classes.
-
-## Notes
-
-- The project intentionally uses in-memory collections only and no database.
-- The API returns JSON for normal responses and error responses.
-- Because the project uses `jakarta.*` packages, it should be deployed to Tomcat 10.1 or newer rather than Tomcat 9.
-
-## References
-
-- Coursework brief: `5COSC022W Coursework Specification.v3(1).pdf`
-- Supporting reference: `JAX-RS_Reference_Documentation.pdf`
+Notes
+The application uses only in-memory data storage and does not rely on a database.
+All responses, including errors, are returned in JSON format.
+Since the project uses jakarta.* packages, it should be deployed on Tomcat 10.1 or later instead of Tomcat 9.
