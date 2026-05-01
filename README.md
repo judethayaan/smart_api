@@ -14,7 +14,7 @@ All data is stored in memory using Java collections only, as required by the cou
 
 - Java 17
 - JAX-RS using Jersey 3.1.1
-- Apache Tomcat 10.1+ (javax.* compatible)
+- Java EE (JAX-RS using javax.ws.rs)
 - Maven WAR project
 - JSON payloads via Jackson
 
